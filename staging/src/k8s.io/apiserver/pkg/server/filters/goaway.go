@@ -19,7 +19,10 @@ package filters
 import (
 	"math/rand"
 	"net/http"
+	"strings"
 	"sync"
+
+	"k8s.io/klog/v2"
 )
 
 // GoawayDecider decides if server should send a GOAWAY
@@ -62,11 +65,39 @@ type goaway struct {
 	decider GoawayDecider
 }
 
+// User Agents on control plane nodes should not receive GOAWAY to alleviate loopback hairpinning
+var ignoredUserAgents = []string{
+	"kube-controller-manager",
+	"kube-scheduler",
+	"kube-apiserver",
+}
+
+// isInIgnoredUserAgents returns true if UA string begins with control plane component prefixes
+func isInIgnoredUserAgents(ua string) bool {
+	// ie. kube-scheduler/v1.22.17 / kube-controller-manager/v1.22.17
+	for _, el := range ignoredUserAgents {
+		if strings.HasPrefix(ua, el) {
+			return true
+		}
+	}
+	return false
+}
+
+// isLeaderElection returns if ua ends with leader-election, ie.
+func isLeaderElection(ua string) bool {
+	// kube-scheduler/v1.22.17 (linux/amd64) kubernetes/a7736ea/leader-election
+	return strings.HasSuffix(ua, "leader-election")
+}
+
 // ServeHTTP implement HTTP handler
 func (h *goaway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Proto == "HTTP/2.0" && h.decider.Goaway(r) {
-		// Send a GOAWAY and tear down the TCP connection when idle.
-		w.Header().Set("Connection", "close")
+		// Ignore control plane components and leader election calls
+		if !isInIgnoredUserAgents(r.UserAgent()) && !isLeaderElection(r.UserAgent()) {
+			klog.V(2).Infof("Sending goaway to UA:%s, URL:%s, Remote:%s", r.UserAgent(), r.URL, r.RemoteAddr)
+			// Send a GOAWAY and tear down the TCP connection when idle.
+			w.Header().Set("Connection", "close")
+		}
 	}
 
 	h.handler.ServeHTTP(w, r)

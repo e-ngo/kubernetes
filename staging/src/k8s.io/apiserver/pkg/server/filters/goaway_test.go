@@ -192,7 +192,7 @@ type watchResponse struct {
 
 // requestGOAWAYServer request test GOAWAY server using specified method and data according to the given url.
 // A non-nil channel will be returned if the request is watch, and a watchResponse can be got from the channel when watch done.
-func requestGOAWAYServer(client *http.Client, serverBaseURL, url string) (<-chan watchResponse, error) {
+func requestGOAWAYServer(client *http.Client, serverBaseURL, url, userAgent string) (<-chan watchResponse, error) {
 	method := http.MethodGet
 	var reqBody io.Reader
 
@@ -205,6 +205,8 @@ func requestGOAWAYServer(client *http.Client, serverBaseURL, url string) (<-chan
 	if err != nil {
 		return nil, fmt.Errorf("unexpect new request error: %v", err)
 	}
+	// set UserAgent
+	req.Header.Set("User-Agent", userAgent)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed request test server, err: %v", err)
@@ -276,8 +278,9 @@ func TestClientReceivedGOAWAY(t *testing.T) {
 	defer s.Close()
 
 	cases := []struct {
-		name string
-		reqs []string
+		name      string
+		reqs      []string
+		userAgent string
 		// expectConnections always equals to GOAWAY requests(urlGoaway or urlWatchWithGoaway) + 1
 		expectConnections int
 	}{
@@ -305,6 +308,11 @@ func TestClientReceivedGOAWAY(t *testing.T) {
 			name:              "combine with watch-with-goaway",
 			reqs:              []string{urlGet, urlWatchWithGoaway, urlGet, urlWatch, urlGetWithGoaway, urlGet, urlPost},
 			expectConnections: 3,
+		},
+		{
+			name:              "ignoredUserAgent with watch-with-goaway should only use one connection",
+			reqs:              []string{urlGet, urlWatchWithGoaway, urlGet, urlWatch, urlGetWithGoaway, urlGet, urlPost},
+			expectConnections: 1,
 		},
 	}
 
@@ -347,7 +355,7 @@ func TestClientReceivedGOAWAY(t *testing.T) {
 
 			watchChs := make([]<-chan watchResponse, 0)
 			for _, url := range tc.reqs {
-				w, err := requestGOAWAYServer(client, s.URL, url)
+				w, err := requestGOAWAYServer(client, s.URL, url, tc.userAgent)
 				if err != nil {
 					t.Fatalf("failed to request server, err: %v", err)
 				}
@@ -485,7 +493,7 @@ func TestGOAWAYConcurrency(t *testing.T) {
 					return
 				}
 
-				w, err := requestGOAWAYServer(client, s.URL, url)
+				w, err := requestGOAWAYServer(client, s.URL, url, "")
 				if err != nil {
 					t.Errorf("failed to request %q, err: %v", url, err)
 				}
